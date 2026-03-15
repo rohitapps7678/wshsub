@@ -395,7 +395,7 @@ class AdminGenerateVendorCodeView(APIView):
 
         # एक temporary user बनाएं (phone और username बाद में अपडेट होगा)
         temp_user = User.objects.create(
-            phone=f"temp_{secrets.token_hex(6)}",  # unique temporary phone
+            phone=f"t_{secrets.token_hex(5)}",  # unique temporary phone
             username=f"temp_vendor_{secrets.token_hex(4)}",
             is_vendor=True,
             is_active=False,  # अभी inactive
