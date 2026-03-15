@@ -359,3 +359,12 @@ class CustomerProfileView(APIView):
 
         user.save(update_fields=allowed_fields)
         return Response(UserSerializer(user).data)
+
+class HealthCheckView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({
+            "status": "ok",
+            "message": "Server is healthy 🚀"
+        }, status=status.HTTP_200_OK)
