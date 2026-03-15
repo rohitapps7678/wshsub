@@ -21,6 +21,11 @@ urlpatterns = [
     views.BuyPlanView.as_view(),
     name="buy-plan"
     ),
+    path(
+    "health/",
+    views.HealthCheckView.as_view(),
+    name="health"
+    ),
     path('profile/', views.CustomerProfileView.as_view(), name='customer-profile'),
     path('profile/update/', views.CustomerProfileView.as_view(), name='customer-profile-update'),  # optional अगर अलग चाहो
 
