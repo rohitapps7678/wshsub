@@ -40,7 +40,7 @@ class CustomerRegisterView(APIView):
         )
         return Response(UserSerializer(user).data, status=201)
 
-
+#hkwkjeh
 class CustomerLoginView(APIView):
     def post(self, request):
         phone = request.data.get('phone')
