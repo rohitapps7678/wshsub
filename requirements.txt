@@ -1,7 +1,10 @@
-django==4.2.16
-djangorestframework==3.15.2
-django-cors-headers==4.5.0
-djangorestframework-simplejwt==5.3.1
-python-dotenv==1.0.1
-pillow==10.4.0          
-qrcode[pil]==8.0      
+Django
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+gunicorn
+psycopg2-binary
+python-dotenv
+qrcode
+Pillow
+dj-database-url
