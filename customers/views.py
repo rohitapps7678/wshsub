@@ -40,20 +40,25 @@ class CustomerRegisterView(APIView):
         )
         return Response(UserSerializer(user).data, status=201)
 
-#hkwkjeh
 class CustomerLoginView(APIView):
     def post(self, request):
         phone = request.data.get('phone')
         password = request.data.get('password')
-        user = authenticate(username=phone, password=password)
-        if not user:
+
+        try:
+            user = User.objects.get(phone=phone)
+        except User.DoesNotExist:
+            return Response({"error": "Invalid credentials"}, status=401)
+
+        if not user.check_password(password):
             return Response({"error": "Invalid credentials"}, status=401)
 
         refresh = RefreshToken.for_user(user)
+
         return Response({
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-            'user': UserSerializer(user).data
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+            "user": UserSerializer(user).data
         })
 
 
