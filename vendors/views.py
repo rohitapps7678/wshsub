@@ -1,0 +1,422 @@
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.db import transaction, models
+from django.db.models import Count
+from rest_framework.permissions import IsAuthenticated
+from django.utils import timezone
+from datetime import timedelta
+from django.contrib.auth import authenticate
+import secrets
+from django.contrib.auth.hashers import make_password
+
+from customers.models import Subscription, WashHistory, User, Plan, VehicleType
+from customers.utils import validate_qr_and_get_subscription, deduct_wash_and_create_history
+from .models import Vendor
+from .serializers import (
+    VendorRegisterSerializer, VendorSerializer,
+    AdminVendorCreateSerializer
+)
+from .permissions import IsVendor, IsSuperAdmin
+
+
+# पहले से मौजूद views (vendor side) — इन्हें छुआ नहीं
+class VendorRegisterView(APIView):
+    def post(self, request):
+        serializer = VendorRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        vendor = serializer.save()
+        return Response(VendorSerializer(vendor).data, status=status.HTTP_201_CREATED)
+
+
+class VendorProfileView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = request.user.vendor_profile
+        serializer = VendorSerializer(vendor)
+        return Response(serializer.data)
+
+
+class ScanQRAndDeductView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    @transaction.atomic
+    def post(self, request):
+        qr_string = request.data.get('qr_string')
+        latitude = request.data.get('latitude')
+        longitude = request.data.get('longitude')
+
+        if not qr_string:
+            return Response({"error": "qr_string is required"}, status=400)
+
+        subscription = validate_qr_and_get_subscription(qr_string)
+        if not subscription:
+            return Response({"error": "Invalid QR or no washes left"}, status=400)
+
+        vendor = request.user.vendor_profile
+        result = deduct_wash_and_create_history(
+            sub=subscription,
+            vendor_id=vendor.id,
+            lat=latitude,
+            lon=longitude,
+            notes=f"Scanned by {vendor.center_name} (ID: {vendor.id})"
+        )
+
+        if not result['success']:
+            return Response(result, status=400)
+
+        return Response({
+            "success": True,
+            "message": "Wash recorded",
+            "customer_phone": result['customer_phone'],
+            "remaining_washes": result['remaining'],
+            "plan_name": result['plan_name'],
+            "wash_time": timezone.now().isoformat(),
+            "vendor_center": vendor.center_name
+        }, status=200)
+
+
+class VendorDashboardView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = request.user.vendor_profile
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        today_washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=today_start,
+            wash_time__lt=today_end
+        ).count()
+
+        total_washes = WashHistory.objects.filter(vendor=vendor).count()
+
+        WASH_RATE = 120
+        estimated_earnings = total_washes * WASH_RATE
+
+        return Response({
+            "center_name": vendor.center_name,
+            "is_approved": vendor.is_approved,
+            "is_active": vendor.is_active,
+            "today_washes": today_washes,
+            "total_washes_all_time": total_washes,
+            "estimated_total_earnings": f"₹{estimated_earnings:,}",
+            "estimated_today_earnings": f"₹{today_washes * WASH_RATE:,}",
+            "location": {"latitude": vendor.latitude, "longitude": vendor.longitude},
+            "registered_on": vendor.created_at.isoformat()
+        })
+
+
+class TodayWashesView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = request.user.vendor_profile
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=today_start,
+            wash_time__lt=today_end
+        ).select_related('subscription__customer', 'subscription__plan').order_by('-wash_time')[:50]
+
+        data = [
+            {
+                "wash_id": w.id,
+                "time": w.wash_time.strftime("%H:%M %d-%b-%Y"),
+                "customer_phone": w.subscription.customer.phone,
+                "plan": w.subscription.plan.name,
+                "remaining_after_wash": w.subscription.remaining_washes,
+                "location": f"{w.latitude or 'N/A'}, {w.longitude or 'N/A'}",
+                "notes": w.notes[:100]
+            }
+            for w in washes
+        ]
+
+        return Response({
+            "today_date": today_start.strftime("%d %b %Y"),
+            "total_today_washes": len(data),
+            "washes": data
+        })
+
+
+# ────────────────────────────────────────────────
+#           ADMIN ONLY ENDPOINTS (नया हिस्सा)
+# ────────────────────────────────────────────────
+
+
+class AdminVendorListView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        today = timezone.now().date()
+
+        vendors = Vendor.objects.annotate(
+            total_washes=Count('washhistory'),
+            today_washes=Count(
+                'washhistory',
+                filter=models.Q(washhistory__wash_time__date=today)
+            )
+        ).select_related('user').order_by('-created_at')
+
+        # Optional filter by status
+        status_filter = request.query_params.get('status')
+        if status_filter == 'pending':
+            vendors = vendors.filter(is_approved=False)
+        elif status_filter == 'approved':
+            vendors = vendors.filter(is_approved=True)
+
+        serializer = VendorSerializer(vendors, many=True)
+        return Response({
+            "count": vendors.count(),
+            "vendors": serializer.data
+        })
+
+
+class AdminVendorDetailView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request, pk):
+        try:
+            vendor = Vendor.objects.annotate(
+                total_washes=Count('washhistory'),
+                today_washes=Count(
+                    'washhistory',
+                    filter=models.Q(washhistory__wash_time__date=timezone.now().date())
+                )
+            ).select_related('user').get(pk=pk)
+
+            serializer = VendorSerializer(vendor)
+            return Response(serializer.data)
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+
+class AdminApproveVendorView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request, pk):
+        try:
+            vendor = Vendor.objects.get(pk=pk)
+            if vendor.is_approved:
+                return Response({"message": "Already approved"}, status=400)
+            
+            vendor.is_approved = True
+            vendor.is_active = True
+            vendor.save()
+            
+            return Response({"message": "Vendor approved successfully"})
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+
+class AdminRejectVendorView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request, pk):
+        try:
+            vendor = Vendor.objects.get(pk=pk)
+            if not vendor.is_approved:
+                return Response({"message": "Already not approved / rejected"}, status=400)
+            
+            vendor.is_approved = False
+            vendor.is_active = False
+            vendor.save()
+            
+            return Response({"message": "Vendor rejected / deactivated"})
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+
+class AdminCreateVendorView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+
+        serializer = AdminVendorCreateSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        phone = serializer.validated_data['phone']
+        password = serializer.validated_data['password']
+
+        if User.objects.filter(phone=phone).exists():
+            return Response({"error": "Phone number already registered"}, status=400)
+
+        user = User.objects.create(
+            phone=phone,
+            username=phone,
+            password=make_password(password),
+            is_vendor=True,
+            is_customer=False
+        )
+
+        vendor = Vendor.objects.create(
+            user=user,
+            center_name=serializer.validated_data['center_name'],
+            address=serializer.validated_data.get('address', ''),
+            latitude=serializer.validated_data.get('latitude'),
+            longitude=serializer.validated_data.get('longitude'),
+            is_approved=True,
+            is_active=True
+        )
+
+        return Response({
+            "message": "Vendor created successfully",
+            "vendor": VendorSerializer(vendor).data
+        }, status=201)
+
+class VendorLoginView(APIView):
+
+    def post(self, request):
+
+        phone = request.data.get("phone")
+        password = request.data.get("password")
+
+        user = authenticate(username=phone, password=password)
+
+        if not user:
+            return Response({"error":"Invalid credentials"}, status=400)
+
+        if not user.is_vendor:
+            return Response({"error":"Not a vendor account"}, status=400)
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "user": {
+                "phone": user.phone,
+                "is_vendor": user.is_vendor,
+                "is_approved": user.vendor_profile.is_approved
+            }
+        })
+
+class AdminSubscriptionListView(APIView):
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get(self, request):
+
+        plans = (
+            Plan.objects
+            .select_related("vendor", "vehicle_type")
+            .order_by("-created_at")
+        )
+
+        data = []
+
+        for p in plans:
+
+            data.append({
+
+                "id": p.id,
+
+                "vendor_id": p.vendor.id if p.vendor else None,
+
+                "vendor_name": p.vendor.center_name if p.vendor else "-",
+
+                "plan_name": p.name,
+
+                "vehicle_type": p.vehicle_type.name,
+
+                "price": float(p.price),
+
+                "washes": p.washes,
+
+                "duration_type": p.duration_type,
+
+                "created_at": p.created_at
+
+            })
+
+        return Response({
+            "count": plans.count(),
+            "plans": data
+        })
+
+class AdminCreateSubscriptionView(APIView):
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def post(self, request):
+
+        name = request.data.get("name")
+        price = request.data.get("price")
+        washes = request.data.get("washes")
+        duration_type = request.data.get("duration_type")
+        vehicle_type = request.data.get("vehicle_type")
+        vendor_id = request.data.get("vendor_id")
+
+        vehicle, _ = VehicleType.objects.get_or_create(
+            name=vehicle_type
+        )
+
+        vendor = Vendor.objects.get(id=vendor_id)
+
+        plan = Plan.objects.create(
+            vendor=vendor,
+            name=name,
+            price=price,
+            washes=washes,
+            duration_type=duration_type,
+            vehicle_type=vehicle
+        )
+
+        return Response({
+            "message": "Subscription created successfully",
+            "plan_id": plan.id
+        })
+
+class AdminGenerateVendorCodeView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        center_name_hint = request.data.get("center_name", "Pending Vendor")
+
+        code = secrets.token_hex(10).upper()
+
+        # एक temporary user बनाएं (phone और username बाद में अपडेट होगा)
+        temp_user = User.objects.create(
+            phone=f"temp_{secrets.token_hex(6)}",  # unique temporary phone
+            username=f"temp_vendor_{secrets.token_hex(4)}",
+            is_vendor=True,
+            is_active=False,  # अभी inactive
+            # password नहीं सेट कर रहे क्योंकि बाद में vendor सेट करेगा
+        )
+
+        vendor = Vendor.objects.create(
+            user=temp_user,  # ← यहाँ user assign जरूरी है
+            center_name=center_name_hint,
+            registration_code=code,
+            registration_code_created_at=timezone.now(),
+            registration_code_used=False,
+            is_approved=False,
+            is_active=False,
+        )
+
+        return Response({
+            "message": "Registration code generated successfully",
+            "registration_code": code,
+            "vendor_id": vendor.id,
+            "temp_phone_hint": temp_user.phone,  # optional debug
+            "valid_until": (timezone.now() + timezone.timedelta(hours=72)).isoformat(),
+            "instructions": "इस code को vendor को भेजें। वे registration में इस्तेमाल करेंगे।"
+        }, status=status.HTTP_201_CREATED)
