@@ -238,43 +238,94 @@ class AdminCustomerListView(APIView):
             "customers": data
         })
 
-
 class AdminCustomerDetailView(APIView):
+    """
+    Super admin के लिए किसी एक customer की पूरी डिटेल्स लौटाता है:
+    - Customer basic info
+    - All subscriptions (with plan & vehicle details)
+    - Active subscription (if any) — separately highlighted
+    - Recent wash history
+    - Summary stats
+    """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsSuperAdmin]
 
     def get(self, request, pk):
         try:
-            customer = User.objects.get(id=pk, is_customer=True)
+            customer = User.objects.select_related().get(
+                id=pk,
+                is_customer=True
+            )
         except User.DoesNotExist:
-            return Response({"error": "Customer not found"}, status=404)
+            return Response(
+                {"error": "Customer not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        subscriptions = Subscription.objects.filter(customer=customer).select_related('plan').order_by('-start_date')
-        history = WashHistory.objects.filter(subscription__customer=customer).select_related('vendor', 'subscription__plan').order_by('-wash_time')[:50]
+        # All subscriptions (latest first)
+        subscriptions = Subscription.objects.filter(
+            customer=customer
+        ).select_related(
+            'plan',
+            'plan__vehicle_type',
+            'plan__vendor'
+        ).order_by('-start_date')
 
-        sub_data = SubscriptionSerializer(subscriptions, many=True).data
+        # Active subscription (latest one if multiple — normally should be 0 or 1)
+        active_subscription = subscriptions.filter(is_active=True).order_by('-start_date').first()
+
+        # Wash history — last 50 records
+        history_qs = WashHistory.objects.filter(
+            subscription__customer=customer
+        ).select_related(
+            'vendor',
+            'subscription__plan'
+        ).order_by('-wash_time')[:50]
+
+        # Serializers
+        customer_data = UserSerializer(customer).data
+        subscriptions_data = SubscriptionSerializer(subscriptions, many=True).data
         history_data = [
             {
                 "id": h.id,
-                "date": h.wash_time.strftime("%d %b %Y %H:%M"),
-                "vendor": h.vendor.center_name if h.vendor else "Unknown",
+                "date": h.wash_time.strftime("%d %b %Y, %H:%M"),
+                "vendor": h.vendor.center_name if h.vendor else "Unknown Center",
+                "vendor_id": h.vendor.id if h.vendor else None,
                 "plan": h.subscription.plan.name,
-                "remaining": h.subscription.remaining_washes,
-                "notes": h.notes[:100]
+                "vehicle_type": h.subscription.plan.vehicle_type.name if h.subscription.plan.vehicle_type else "N/A",
+                "remaining_after_wash": h.subscription.remaining_washes,
+                "notes": h.notes[:120] if h.notes else "",
+                "location": f"{h.latitude:.5f}, {h.longitude:.5f}" if h.latitude and h.longitude else "N/A"
             }
-            for h in history
+            for h in history_qs
         ]
 
+        # Active subscription data (if exists)
+        active_sub_data = None
+        if active_subscription:
+            active_sub_data = SubscriptionSerializer(active_subscription).data
+            # Extra clarity for frontend
+            active_sub_data["vehicle_type_name"] = active_subscription.plan.vehicle_type.name if active_subscription.plan.vehicle_type else None
+            active_sub_data["vendor_name"] = active_subscription.plan.vendor.center_name if active_subscription.plan.vendor else None
+
         return Response({
-            "customer": UserSerializer(customer).data,
-            "subscriptions": sub_data,
+            "customer": {
+                **customer_data,
+                "date_joined": customer.date_joined.isoformat() if customer.date_joined else None,
+                "last_login": customer.last_login.isoformat() if customer.last_login else None,
+            },
+            "active_subscription": active_sub_data,
+            "subscriptions": subscriptions_data,
             "wash_history": history_data,
             "stats": {
                 "total_subscriptions": subscriptions.count(),
-                "active_subscriptions": subscriptions.filter(is_active=True).count(),
-                "total_washes": history.count()
+                "active_subscriptions_count": subscriptions.filter(is_active=True).count(),
+                "lifetime_washes": WashHistory.objects.filter(
+                    subscription__customer=customer
+                ).count(),  # full count, not just last 50
+                "recent_washes_shown": len(history_data),
             }
-        })
+        }, status=status.HTTP_200_OK)
 
 
 class AdminCustomerUpdateView(APIView):
