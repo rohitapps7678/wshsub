@@ -67,10 +67,23 @@ class Subscription(models.Model):
     
     qr_string = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     qr_image = models.ImageField(upload_to='qr_codes/subscriptions/', null=True, blank=True)
+    
+    # ─── नया फील्ड ────────────────────────────────
+    vehicle_number = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        verbose_name="Vehicle Number"
+    )
+    vehicle_number_updated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Vehicle Number Updated At"
+    )
 
     def __str__(self):
-        return f"{self.customer.phone} - {self.plan.name} ({self.remaining_washes} left)"
-
+        veh = f" ({self.vehicle_number})" if self.vehicle_number else ""
+        return f"{self.customer.phone} - {self.plan.name}{veh} ({self.remaining_washes} left)"
 
 class WashHistory(models.Model):
     subscription = models.ForeignKey(Subscription, on_delete=models.PROTECT, related_name='wash_history')

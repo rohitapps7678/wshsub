@@ -35,6 +35,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         model = Subscription
         fields = [
             'id', 'customer', 'plan', 'remaining_washes',
-            'start_date', 'is_active', 'qr_string'
+            'start_date', 'is_active', 'qr_string',
+            'vehicle_number', 'vehicle_number_updated_at'   # ← नया
         ]
-        read_only_fields = ['remaining_washes', 'start_date', 'is_active', 'qr_string']
+        read_only_fields = ['remaining_washes', 'start_date', 'is_active', 'qr_string', 'vehicle_number_updated_at']

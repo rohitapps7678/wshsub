@@ -88,13 +88,27 @@ class MyActiveSubscriptionView(APIView):
 
         return Response(SubscriptionSerializer(sub).data)
 
-
 class BuySubscriptionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
     def post(self, request):
         plan_id = request.data.get('plan_id')
+        vehicle_number = request.data.get('vehicle_number')  # नया फील्ड
+
+        if not plan_id:
+            return Response({"error": "plan_id is required"}, status=400)
+
+        if not vehicle_number or not str(vehicle_number).strip():
+            return Response({"error": "Vehicle number is required"}, status=400)
+
+        vehicle_number = str(vehicle_number).strip().upper()
+
+        # वैकल्पिक: भारतीय vehicle number format check (MH12AB1234 जैसा)
+        # import re
+        # if not re.match(r'^[A-Z]{2}[0-9]{1,2}[A-Z]{0,2}[0-9]{4}$', vehicle_number):
+        #     return Response({"error": "Invalid vehicle number format (e.g. MH12AB1234)"}, status=400)
+
         try:
             plan = Plan.objects.get(id=plan_id)
         except Plan.DoesNotExist:
@@ -107,7 +121,9 @@ class BuySubscriptionView(APIView):
             customer=request.user,
             plan=plan,
             remaining_washes=plan.washes,
-            is_active=True
+            is_active=True,
+            vehicle_number=vehicle_number,
+            vehicle_number_updated_at=datetime.now()   # timestamp डाल दिया
         )
 
         attach_qr_to_subscription(sub)
