@@ -21,6 +21,9 @@ urlpatterns = [
     views.BuyPlanView.as_view(),
     name="buy-plan"
     ),
+        # Vehicles
+    path('vehicles/', views.VehicleListCreateView.as_view(), name='vehicle-list-create'),
+    path('vehicles/<int:pk>/', views.VehicleDetailView.as_view(), name='vehicle-detail'),
     path(
     "health/",
     views.HealthCheckView.as_view(),

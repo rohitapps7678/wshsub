@@ -1,17 +1,18 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import status, permissions, generics
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.contrib.auth import authenticate
 from rest_framework.permissions import AllowAny
 from django.db import transaction
 from django.db.models import Q, Count
+from datetime import datetime
 
-from .models import User, VehicleType, Plan, Subscription, WashHistory
+from .models import User, VehicleType, Plan, Subscription, WashHistory, Vehicle
 from .serializers import (
     UserSerializer, VehicleTypeSerializer, PlanSerializer,
-    SubscriptionSerializer
+    SubscriptionSerializer, VehicleSerializer
 )
 from .utils import attach_qr_to_subscription, get_nearby_vendors
 from .permissions import IsSuperAdmin   # अगर अलग फाइल में है तो import करें
@@ -332,26 +333,42 @@ class CustomerPlansView(APIView):
         return Response(data)
 
 class BuyPlanView(APIView):
-
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-
         plan_id = request.data.get("plan_id")
+        vehicle_number = request.data.get("vehicle_number")  # ← यहाँ से लेना जरूरी
 
-        plan = Plan.objects.get(id=plan_id)
+        if not plan_id:
+            return Response({"error": "plan_id is required"}, status=400)
+
+        if not vehicle_number or not str(vehicle_number).strip():
+            return Response({"error": "Vehicle number is required"}, status=400)
+
+        vehicle_number = str(vehicle_number).strip().upper()
+
+        try:
+            plan = Plan.objects.get(id=plan_id)
+        except Plan.DoesNotExist:
+            return Response({"error": "Invalid plan"}, status=404)
 
         sub = Subscription.objects.create(
             customer=request.user,
             plan=plan,
-            remaining_washes=plan.washes
+            remaining_washes=plan.washes,
+            vehicle_number=vehicle_number,                    # ← यहाँ save करो
+            vehicle_number_updated_at=datetime.now()          # ← timestamp
         )
+
+        attach_qr_to_subscription(sub)
 
         return Response({
             "message": "Subscription activated",
             "subscription_id": sub.id,
-            "remaining_washes": sub.remaining_washes
-        })
+            "remaining_washes": sub.remaining_washes,
+            "vehicle_number": sub.vehicle_number,
+            "subscription": SubscriptionSerializer(sub).data   # पूरा डेटा लौटाओ
+        }, status=201)
 
 class CustomerProfileView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -390,3 +407,21 @@ class HealthCheckView(APIView):
             "status": "ok",
             "message": "Server is healthy 🚀"
         }, status=status.HTTP_200_OK)
+ 
+class VehicleListCreateView(generics.ListCreateAPIView):
+    serializer_class = VehicleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Vehicle.objects.filter(customer=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(customer=self.request.user)
+
+
+class VehicleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = VehicleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Vehicle.objects.filter(customer=self.request.user)
