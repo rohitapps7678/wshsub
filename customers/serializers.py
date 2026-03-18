@@ -5,7 +5,8 @@ from .models import User, VehicleType, Plan, Subscription, Vehicle
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'phone', 'username', 'is_customer', 'is_vendor']
+        fields = ['id', 'phone', 'username', 'is_customer', 'name',                     # ← नया
+            'preferred_language', 'is_vendor']
 
 
 class VehicleTypeSerializer(serializers.ModelSerializer):

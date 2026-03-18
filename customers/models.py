@@ -10,6 +10,19 @@ class User(AbstractUser):
 
     USERNAME_FIELD = 'phone'
     REQUIRED_FIELDS = ['username']
+    name = models.CharField(max_length=150, blank=True, default='', verbose_name="Full Name")
+    preferred_language = models.CharField(
+        max_length=10,
+        default='en',
+        choices=[
+            ('en', 'English'),
+            ('hi', 'Hindi'),
+            ('ta', 'Tamil'),
+            ('te', 'Telugu'),
+            # भविष्य में और भाषाएँ जोड़ सकते हैं
+        ],
+        verbose_name="Preferred Language"
+    )
 
     def __str__(self):
         return self.phone or self.username
