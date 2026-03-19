@@ -61,7 +61,10 @@ class WashHistoryVendorSerializer(serializers.ModelSerializer):
     customer_phone = serializers.CharField(source='subscription.customer.phone', read_only=True)
     customer_name = serializers.CharField(source='subscription.customer.name', read_only=True, allow_null=True)
     plan_name = serializers.CharField(source='subscription.plan.name', read_only=True)
-    vehicle_number = serializers.CharField(source='subscription.vehicle.number', read_only=True, allow_null=True)
+    
+    # vehicle_number सीधे CharField से ले रहे हैं (related नहीं है)
+    vehicle_number = serializers.CharField(source='subscription.vehicle_number', read_only=True, allow_null=True)
+    
     time_ago = serializers.SerializerMethodField()
 
     class Meta:
@@ -69,7 +72,7 @@ class WashHistoryVendorSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'wash_time',
-            'time_ago',             # human readable "2 hours ago"
+            'time_ago',
             'customer_phone',
             'customer_name',
             'plan_name',
@@ -78,17 +81,19 @@ class WashHistoryVendorSerializer(serializers.ModelSerializer):
             'latitude',
             'longitude',
         ]
-        read_only_fields = fields
 
     def get_time_ago(self, obj):
         delta = timezone.now() - obj.wash_time
-        if delta.days >= 1:
-            return f"{delta.days} day{'s' if delta.days > 1 else ''} ago"
-        elif delta.seconds >= 3600:
-            hours = delta.seconds // 3600
+        days = delta.days
+        seconds = delta.seconds
+
+        if days > 0:
+            return f"{days} day{'s' if days > 1 else ''} ago"
+        elif seconds >= 3600:
+            hours = seconds // 3600
             return f"{hours} hour{'s' if hours > 1 else ''} ago"
-        elif delta.seconds >= 60:
-            minutes = delta.seconds // 60
+        elif seconds >= 60:
+            minutes = seconds // 60
             return f"{minutes} min{'s' if minutes > 1 else ''} ago"
         else:
             return "just now"

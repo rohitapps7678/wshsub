@@ -172,28 +172,28 @@ class VendorDashboardView(APIView):
 
         return Response(data, status=status.HTTP_200_OK)
 
-# vendors/views.py
+# vendors/views.py # आपका serializer
 
 class VendorWashHistoryView(APIView):
     authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated, IsVendor]
+    permission_classes = [IsVendor]  # permissions.IsAuthenticated पहले से है
 
     def get(self, request):
         vendor = request.user.vendor_profile
 
-        # optional query params for filtering/pagination
-        page = int(request.GET.get('page', 1))
-        limit = int(request.GET.get('limit', 20))
+        page = int(request.query_params.get('page', 1))
+        limit = int(request.query_params.get('limit', 20))
 
-        queryset = WashHistory.objects.filter(vendor=vendor).select_related(
+        # सही select_related — vehicle नहीं है, इसलिए हटाया
+        queryset = WashHistory.objects.filter(
+            vendor=vendor
+        ).select_related(
             'subscription__customer',
-            'subscription__plan',
-            'subscription__vehicle'
+            'subscription__plan'
         ).order_by('-wash_time')
 
         total_count = queryset.count()
 
-        # simple pagination
         start = (page - 1) * limit
         end = start + limit
         items = queryset[start:end]
@@ -206,7 +206,7 @@ class VendorWashHistoryView(APIView):
             "limit": limit,
             "has_more": end < total_count,
             "history": serializer.data
-        })
+        }, status=status.HTTP_200_OK)
 
 class VendorWalletView(APIView):
     authentication_classes = [JWTAuthentication]
