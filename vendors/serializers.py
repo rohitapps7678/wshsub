@@ -56,6 +56,42 @@ class VendorSerializer(serializers.ModelSerializer):
             'registration_code_created_at',
         ]
 
+# vendors/serializers.py
+class WashHistoryVendorSerializer(serializers.ModelSerializer):
+    customer_phone = serializers.CharField(source='subscription.customer.phone', read_only=True)
+    customer_name = serializers.CharField(source='subscription.customer.name', read_only=True, allow_null=True)
+    plan_name = serializers.CharField(source='subscription.plan.name', read_only=True)
+    vehicle_number = serializers.CharField(source='subscription.vehicle.number', read_only=True, allow_null=True)
+    time_ago = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WashHistory
+        fields = [
+            'id',
+            'wash_time',
+            'time_ago',             # human readable "2 hours ago"
+            'customer_phone',
+            'customer_name',
+            'plan_name',
+            'vehicle_number',
+            'notes',
+            'latitude',
+            'longitude',
+        ]
+        read_only_fields = fields
+
+    def get_time_ago(self, obj):
+        delta = timezone.now() - obj.wash_time
+        if delta.days >= 1:
+            return f"{delta.days} day{'s' if delta.days > 1 else ''} ago"
+        elif delta.seconds >= 3600:
+            hours = delta.seconds // 3600
+            return f"{hours} hour{'s' if hours > 1 else ''} ago"
+        elif delta.seconds >= 60:
+            minutes = delta.seconds // 60
+            return f"{minutes} min{'s' if minutes > 1 else ''} ago"
+        else:
+            return "just now"
 
 class VendorRegisterSerializer(serializers.ModelSerializer):
     """

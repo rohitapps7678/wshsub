@@ -14,6 +14,10 @@ urlpatterns = [
     views.AdminSubscriptionListView.as_view(),
     name="admin-subscriptions"
     ),
+    # vendors/urls.py
+    path('wallet/', views.VendorWalletView.as_view(), name='vendor-wallet'),
+    # vendors/urls.py
+    path('history/', views.VendorWashHistoryView.as_view(), name='vendor-wash-history'),
     path(
     "admin/subscriptions/create/",
     views.AdminCreateSubscriptionView.as_view(),

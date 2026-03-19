@@ -7,10 +7,11 @@ from django.db import transaction, models
 from django.db.models import Count
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 from django.contrib.auth import authenticate
 import secrets
 from django.contrib.auth.hashers import make_password
+from dateutil.relativedelta import relativedelta
 
 from customers.models import Subscription, WashHistory, User, Plan, VehicleType
 from customers.utils import validate_qr_and_get_subscription, deduct_wash_and_create_history
@@ -87,32 +88,188 @@ class VendorDashboardView(APIView):
 
     def get(self, request):
         vendor = request.user.vendor_profile
-        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
 
+        # आज का डेटा
         today_washes = WashHistory.objects.filter(
             vendor=vendor,
             wash_time__gte=today_start,
             wash_time__lt=today_end
         ).count()
 
+        # कुल washes (all time)
         total_washes = WashHistory.objects.filter(vendor=vendor).count()
 
-        WASH_RATE = 120
-        estimated_earnings = total_washes * WASH_RATE
+        # इस महीने का डेटा (monthly earnings & progress)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        return Response({
-            "center_name": vendor.center_name,
+        monthly_washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=month_start
+        ).count()
+
+        # पिछले 4 महीनों का summary (bar chart के लिए)
+        monthly_history = []
+        current = now
+
+        for i in range(4):
+            # हर महीने की शुरुआत
+            month_start_loop = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            month_end_loop = (month_start_loop + timedelta(days=32)).replace(day=1)
+
+            count = WashHistory.objects.filter(
+                vendor=vendor,
+                wash_time__gte=month_start_loop,
+                wash_time__lt=month_end_loop
+            ).count()
+
+            monthly_history.append({
+                "month": month_start_loop.strftime("%b"),  # Jan, Feb, ...
+                "washes": count,
+                "earnings": count * 120,
+            })
+
+            # पिछले महीने पर जाएं
+            current = month_start_loop - timedelta(days=1)
+
+        # list को reverse करें → oldest → newest (chart में left to right)
+        monthly_history.reverse()
+
+        # Response data (स्क्रीनशॉट से मैच करने के लिए)
+        WASH_RATE = 120  # अगर अलग model/config से आना है तो वहाँ से लें
+
+        data = {
+            "center_name": vendor.center_name or "My Center",
             "is_approved": vendor.is_approved,
             "is_active": vendor.is_active,
+
+            # Today section
             "today_washes": today_washes,
-            "total_washes_all_time": total_washes,
-            "estimated_total_earnings": f"₹{estimated_earnings:,}",
-            "estimated_today_earnings": f"₹{today_washes * WASH_RATE:,}",
-            "location": {"latitude": vendor.latitude, "longitude": vendor.longitude},
-            "registered_on": vendor.created_at.isoformat()
+            "today_earnings": today_washes * WASH_RATE,
+
+            # All time
+            "total_washes": total_washes,
+            "total_earnings_estimated": total_washes * WASH_RATE,
+
+            # Monthly progress (current month)
+            "monthly_washes_completed": monthly_washes,
+            "monthly_target_washes": 500,           # ← यहाँ config, setting या vendor model से ला सकते हो
+            "monthly_earnings": monthly_washes * WASH_RATE,
+
+            # Last few months for chart
+            "monthly_history": monthly_history,
+
+            # Extra info (optional)
+            "location": {
+                "latitude": vendor.latitude,
+                "longitude": vendor.longitude,
+            } if vendor.latitude and vendor.longitude else None,
+            "registered_on": vendor.created_at.isoformat(),
+        }
+
+        return Response(data, status=status.HTTP_200_OK)
+
+# vendors/views.py
+
+class VendorWashHistoryView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = request.user.vendor_profile
+
+        # optional query params for filtering/pagination
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 20))
+
+        queryset = WashHistory.objects.filter(vendor=vendor).select_related(
+            'subscription__customer',
+            'subscription__plan',
+            'subscription__vehicle'
+        ).order_by('-wash_time')
+
+        total_count = queryset.count()
+
+        # simple pagination
+        start = (page - 1) * limit
+        end = start + limit
+        items = queryset[start:end]
+
+        serializer = WashHistoryVendorSerializer(items, many=True)
+
+        return Response({
+            "count": total_count,
+            "page": page,
+            "limit": limit,
+            "has_more": end < total_count,
+            "history": serializer.data
         })
 
+class VendorWalletView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated, IsVendor]
+
+    def get(self, request):
+        vendor = request.user.vendor_profile
+        WASH_RATE = 120  # बाद में config से लें या dynamic करें
+
+        now = timezone.now()
+
+        # आज की earning
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=today_start
+        ).count()
+        today_earnings = today_washes * WASH_RATE
+
+        # इस महीने
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        this_month_washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=month_start
+        ).count()
+        this_month_earnings = this_month_washes * WASH_RATE
+
+        # पिछले महीने
+        last_month_start = (month_start - relativedelta(months=1))
+        last_month_end = month_start
+        last_month_washes = WashHistory.objects.filter(
+            vendor=vendor,
+            wash_time__gte=last_month_start,
+            wash_time__lt=last_month_end
+        ).count()
+        last_month_earnings = last_month_washes * WASH_RATE
+
+        # कुल अब तक
+        total_washes = WashHistory.objects.filter(vendor=vendor).count()
+        total_earnings = total_washes * WASH_RATE
+
+        return Response({
+            "today": {
+                "washes": today_washes,
+                "earnings": today_earnings,
+            },
+            "this_month": {
+                "washes": this_month_washes,
+                "earnings": this_month_earnings,
+            },
+            "last_month": {
+                "washes": last_month_washes,
+                "earnings": last_month_earnings,
+            },
+            "all_time": {
+                "washes": total_washes,
+                "earnings": total_earnings,
+            },
+            "currency": "INR",
+            # अगर wallet model है तो यहाँ balance, pending, withdrawn आदि ऐड कर सकते हैं
+            # "available_balance": ...,
+            # "pending_payout": ...,
+        })
 
 class TodayWashesView(APIView):
     authentication_classes = [JWTAuthentication]
