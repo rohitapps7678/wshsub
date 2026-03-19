@@ -18,7 +18,7 @@ from customers.utils import validate_qr_and_get_subscription, deduct_wash_and_cr
 from .models import Vendor
 from .serializers import (
     VendorRegisterSerializer, VendorSerializer,
-    AdminVendorCreateSerializer
+    AdminVendorCreateSerializer, WashHistoryVendorSerializer
 )
 from .permissions import IsVendor, IsSuperAdmin
 
