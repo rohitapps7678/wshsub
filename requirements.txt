@@ -8,3 +8,4 @@ python-dotenv
 qrcode
 Pillow
 dj-database-url
+python-dateutil
