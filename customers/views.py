@@ -456,7 +456,7 @@ class CustomerProfileView(APIView):
 
     def post(self, request):  # update के लिए (PUT भी इस्तेमाल कर सकते हो)
         user = request.user
-        allowed_fields = ['username', 'email']  # जो edit करने देना चाहते हो
+        allowed_fields = ['username', 'email', 'name']  # जो edit करने देना चाहते हो
 
         for field in allowed_fields:
             if field in request.data:
