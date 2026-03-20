@@ -445,6 +445,7 @@ class CustomerProfileView(APIView):
         user = request.user
         serializer = UserSerializer(user)
         return Response({
+            "name": user.name,
             "phone": user.phone,
             "username": user.username,
             "email": user.email or None,
