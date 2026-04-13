@@ -30,7 +30,7 @@ urlpatterns = [
     name="health"
     ),
     path('profile/', views.CustomerProfileView.as_view(), name='customer-profile'),
-    path('profile/update/', views.CustomerProfileView.as_view(), name='customer-profile-update'),  # optional अगर अलग चाहो
+    path('profile/update/', views.CustomerProfileView.as_view(), name='customer-profile-update'),
 
     # Other customer views
     path('my-qr/', views.MyQRView.as_view(), name='my-qr'),
@@ -40,4 +40,6 @@ urlpatterns = [
     path('admin/customers/', views.AdminCustomerListView.as_view(), name='admin-customer-list'),
     path('admin/customers/<int:pk>/', views.AdminCustomerDetailView.as_view(), name='admin-customer-detail'),
     path('admin/customers/<int:pk>/update/', views.AdminCustomerUpdateView.as_view(), name='admin-customer-update'),
+    path('admin/customers/<int:pk>/password/', views.AdminCustomerGetPasswordView.as_view(), name='admin-customer-get-password'),
+    path('admin/customers/<int:pk>/reset-password/', views.AdminCustomerResetPasswordView.as_view(), name='admin-customer-reset-password'),
 ]

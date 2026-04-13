@@ -493,3 +493,181 @@ class VehicleDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return Vehicle.objects.filter(customer=self.request.user)
+
+
+class AdminCustomerListView(APIView):
+    """
+    GET /customer/admin/customers/
+    Saare customers stats ke saath return karta hai.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+ 
+    def get(self, request):
+        customers = User.objects.filter(is_customer=True).prefetch_related(
+            'subscriptions', 'subscriptions__plan'
+        ).order_by('-date_joined')
+ 
+        data = []
+        for c in customers:
+            subs = c.subscriptions.all()
+            active_subs = subs.filter(is_active=True)
+            total_washes = sum(
+                (sub.plan.washes - sub.remaining_washes)
+                for sub in subs
+                if sub.plan
+            )
+            data.append({
+                "id": c.id,
+                "phone": c.phone,
+                "name": c.name or "",
+                "date_joined": c.date_joined.isoformat(),
+                "joined": c.date_joined.strftime("%d %b %Y"),
+                "is_active": c.is_active,
+                "stats": {
+                    "total_subscriptions": subs.count(),
+                    "active_subscriptions_count": active_subs.count(),
+                    "lifetime_washes": total_washes,
+                }
+            })
+ 
+        return Response({
+            "count": len(data),
+            "customers": data
+        })
+ 
+ 
+class AdminCustomerDetailView(APIView):
+    """
+    GET /customer/admin/customers/{pk}/
+    Customer ki detail info subscriptions aur wash history ke saath.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+ 
+    def get(self, request, pk):
+        try:
+            customer = User.objects.get(pk=pk, is_customer=True)
+        except User.DoesNotExist:
+            return Response({"error": "Customer not found"}, status=404)
+ 
+        subs = Subscription.objects.filter(customer=customer).select_related(
+            'plan', 'plan__vehicle_type', 'plan__vendor'
+        ).order_by('-start_date')
+ 
+        active_sub = subs.filter(is_active=True).first()
+        total_washes_done = sum(
+            (s.plan.washes - s.remaining_washes) for s in subs if s.plan
+        )
+ 
+        history = WashHistory.objects.filter(
+            subscription__customer=customer
+        ).select_related('vendor', 'subscription__plan').order_by('-wash_time')[:50]
+ 
+        wash_history_data = []
+        for h in history:
+            wash_history_data.append({
+                "date": h.wash_time.strftime("%d %b %Y, %H:%M"),
+                "vendor": h.vendor.center_name if h.vendor else "—",
+                "plan": h.subscription.plan.name if h.subscription.plan else "—",
+                "remaining_after_wash": h.subscription.remaining_washes,
+                "notes": h.notes or "",
+            })
+ 
+        return Response({
+            "customer": {
+                "id": customer.id,
+                "phone": customer.phone,
+                "name": customer.name or "",
+                "date_joined": customer.date_joined.isoformat(),
+                "is_active": customer.is_active,
+            },
+            "stats": {
+                "total_subscriptions": subs.count(),
+                "active_subscriptions_count": subs.filter(is_active=True).count(),
+                "lifetime_washes": total_washes_done,
+            },
+            "active_subscription": SubscriptionSerializer(active_sub).data if active_sub else None,
+            "subscriptions": SubscriptionSerializer(subs, many=True).data,
+            "wash_history": wash_history_data,
+        })
+ 
+ 
+class AdminCustomerUpdateView(APIView):
+    """
+    PATCH /customer/admin/customers/{pk}/update/
+    Customer ki basic info update karta hai.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+ 
+    def patch(self, request, pk):
+        try:
+            customer = User.objects.get(pk=pk, is_customer=True)
+        except User.DoesNotExist:
+            return Response({"error": "Customer not found"}, status=404)
+ 
+        allowed = ['name', 'is_active', 'preferred_language']
+        for field in allowed:
+            if field in request.data:
+                setattr(customer, field, request.data[field])
+        customer.save()
+ 
+        return Response({"message": "Customer updated", "id": customer.id})
+ 
+ 
+class AdminCustomerGetPasswordView(APIView):
+    """
+    GET /customer/admin/customers/{pk}/password/
+    Stored plain password return karta hai (agar admin ne set/reset kiya ho).
+    Self-registered customers ka password recover nahi ho sakta (hashed hota hai).
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+ 
+    def get(self, request, pk):
+        try:
+            customer = User.objects.get(pk=pk, is_customer=True)
+        except User.DoesNotExist:
+            return Response({"error": "Customer not found"}, status=404)
+ 
+        plain = getattr(customer, 'plain_password_hint', None)
+        if plain:
+            return Response({"password": plain, "recoverable": True})
+        return Response({
+            "password": None,
+            "recoverable": False,
+            "message": "Password is hashed. Use Reset Password."
+        })
+ 
+ 
+class AdminCustomerResetPasswordView(APIView):
+    """
+    POST /customer/admin/customers/{pk}/reset-password/
+    Body: { "new_password": "..." }
+    Customer ka login password reset karta hai.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+ 
+    def post(self, request, pk):
+        try:
+            customer = User.objects.get(pk=pk, is_customer=True)
+        except User.DoesNotExist:
+            return Response({"error": "Customer not found"}, status=404)
+ 
+        new_password = request.data.get("new_password", "").strip()
+        if len(new_password) < 6:
+            return Response({"error": "Password must be at least 6 characters"}, status=400)
+ 
+        customer.password = make_password(new_password)
+        if hasattr(customer, 'plain_password_hint'):
+            customer.plain_password_hint = new_password
+        customer.save()
+ 
+        return Response({
+            "message": "Password reset successfully",
+            "customer_id": customer.id,
+            "phone": customer.phone,
+        })
+ 

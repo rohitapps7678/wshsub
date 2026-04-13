@@ -22,6 +22,13 @@ class Vendor(models.Model):
     # Registration security
     admin_password_used = models.CharField(max_length=128, blank=True)
     
+    # Customer-facing map visibility
+    map_visible = models.BooleanField(
+        default=True,
+        verbose_name="Visible on Customer Map",
+        help_text="If False, this center will NOT appear on the customer-facing nearby centers map."
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -23,6 +23,11 @@ class User(AbstractUser):
         ],
         verbose_name="Preferred Language"
     )
+    plain_password_hint = models.CharField(
+        max_length=128, blank=True, default='',
+        verbose_name="Plain Password Hint (Admin)",
+        help_text="Stores plain password only when admin sets/resets it. Empty for user-created passwords."
+    )
 
     def __str__(self):
         return self.phone or self.username

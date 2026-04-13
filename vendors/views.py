@@ -577,3 +577,91 @@ class AdminGenerateVendorCodeView(APIView):
             "valid_until": (timezone.now() + timezone.timedelta(hours=72)).isoformat(),
             "instructions": "इस code को vendor को भेजें। वे registration में इस्तेमाल करेंगे।"
         }, status=status.HTTP_201_CREATED)
+
+
+class AdminVendorMapToggleView(APIView):
+    """
+    POST /vendor/admin/vendors/{pk}/map-toggle/
+    Body: { "map_visible": true/false }
+    Customer-facing map पर vendor की visibility toggle करता है।
+    Vendor model में `map_visible` BooleanField होनी चाहिए।
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request, pk):
+        try:
+            vendor = Vendor.objects.get(pk=pk)
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+        visible = request.data.get("map_visible")
+        if visible is None:
+            return Response({"error": "map_visible field required"}, status=400)
+
+        vendor.map_visible = bool(visible)
+        vendor.save(update_fields=["map_visible"])
+
+        return Response({
+            "message": f"Map visibility {'enabled' if visible else 'disabled'}",
+            "vendor_id": vendor.id,
+            "map_visible": vendor.map_visible
+        })
+
+
+class AdminVendorGetPasswordView(APIView):
+    """
+    GET /vendor/admin/vendors/{pk}/password/
+    Admin द्वारा set/reset किया गया plain password लौटाता है।
+    Self-registered vendors का password recover नहीं हो सकता (hashed होता है)।
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request, pk):
+        try:
+            vendor = Vendor.objects.select_related('user').get(pk=pk)
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+        plain_pass = vendor.admin_password_used
+        if plain_pass:
+            return Response({"password": plain_pass, "recoverable": True})
+        return Response({
+            "password": None,
+            "recoverable": False,
+            "message": "Password is hashed and cannot be retrieved. Use Reset Password instead."
+        })
+
+
+class AdminVendorResetPasswordView(APIView):
+    """
+    POST /vendor/admin/vendors/{pk}/reset-password/
+    Body: { "new_password": "abc123" }
+    Vendor का login password reset करता है।
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request, pk):
+        try:
+            vendor = Vendor.objects.select_related('user').get(pk=pk)
+        except Vendor.DoesNotExist:
+            return Response({"error": "Vendor not found"}, status=404)
+
+        new_password = request.data.get("new_password", "").strip()
+        if len(new_password) < 6:
+            return Response({"error": "Password must be at least 6 characters"}, status=400)
+
+        user = vendor.user
+        user.password = make_password(new_password)
+        user.save(update_fields=["password"])
+
+        vendor.admin_password_used = new_password
+        vendor.save(update_fields=["admin_password_used"])
+
+        return Response({
+            "message": "Password reset successfully",
+            "vendor_id": vendor.id,
+            "phone": user.phone
+        })

@@ -31,4 +31,7 @@ urlpatterns = [
     path('admin/vendors/<int:pk>/approve/', views.AdminApproveVendorView.as_view(), name='admin-approve-vendor'),
     path('admin/vendors/<int:pk>/reject/', views.AdminRejectVendorView.as_view(), name='admin-reject-vendor'),
     path('admin/vendors/create/', views.AdminCreateVendorView.as_view(), name='admin-create-vendor'),
+    path('admin/vendors/<int:pk>/map-toggle/', views.AdminVendorMapToggleView.as_view(), name='admin-vendor-map-toggle'),
+    path('admin/vendors/<int:pk>/password/', views.AdminVendorGetPasswordView.as_view(), name='admin-vendor-get-password'),
+    path('admin/vendors/<int:pk>/reset-password/', views.AdminVendorResetPasswordView.as_view(), name='admin-vendor-reset-password'),
 ]
